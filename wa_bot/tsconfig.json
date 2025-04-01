@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "module": "CommonJS",
+    "esModuleInterop": true,
+    "target": "ES6",
+    "allowSyntheticDefaultImports": true, 
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "types": ["node", "ws"] 
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}

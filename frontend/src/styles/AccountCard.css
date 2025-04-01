@@ -1,0 +1,14 @@
+/* AccountCard.css */
+.account-card {
+    border-radius: 12px;
+    box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+    margin-bottom: 16px;
+  }
+  
+  .account-card .ant-card-head {
+    border-bottom: 1px solid #f0f0f0;
+  }
+  
+  .account-card .ant-card-body {
+    padding: 16px;
+  }
