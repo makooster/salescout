@@ -4,17 +4,30 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/whatsapp_sessions";
+// Simple connection string with enforced database name
+const MONGO_URI = process.env.MONGO_URI 
+  ? process.env.MONGO_URI.replace(/(mongodb(\+srv)?:\/\/[^/]+)(\/[^?]*)?(\?|$)/, '$1/wa_web_user_sessions$4')
+  : "mongodb://localhost:27017/wa_web_user_sessions?retryWrites=true&w=majority";
 
 export const connectDB = async () => {
   try {
+    // Development-only debug logging
+    if (process.env.NODE_ENV !== 'production') {
+      mongoose.set('debug', (collectionName, method, query) => {
+        if (collectionName === 'wa_bot') {
+          console.log(`📦 ${collectionName}.${method}`, query);
+        }
+      });
+    }
+
     await mongoose.connect(MONGO_URI, {
       serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
+      socketTimeoutMS: 45000
     });
-    console.log("✅ MongoDB Connected...");
+
+    console.log(`✅ Connected to MongoDB: ${mongoose.connection.db?.databaseName}`);
   } catch (error) {
-    console.error("❌ MongoDB Connection Error:", error);
+    console.error("❌ MongoDB connection failed:", error instanceof Error ? error.message : error);
     process.exit(1);
   }
 };
@@ -22,21 +35,29 @@ export const connectDB = async () => {
 export const disconnectDB = async () => {
   try {
     await mongoose.disconnect();
-    console.log("🚫 MongoDB Disconnected...");
+    console.log("🚫 MongoDB disconnected");
   } catch (error) {
-    console.error("❌ MongoDB Disconnection Error:", error);
+    console.error("❌ Disconnection error:", error instanceof Error ? error.message : error);
   }
 };
 
-// Add MongoDB connection event listeners
+// Basic connection event listeners
 mongoose.connection.on("connected", () => {
-  console.log("📊 MongoDB connection established");
+  console.log(`📊 Connected to ${mongoose.connection.db?.databaseName || 'unknown database'}`);
 });
 
 mongoose.connection.on("error", (err) => {
-  console.error("❌ MongoDB connection error:", err);
+  console.error("❌ Connection error:", err.message);
 });
 
 mongoose.connection.on("disconnected", () => {
-  console.log("🚫 MongoDB connection disconnected");
+  console.log("🚫 MongoDB disconnected");
 });
+
+// Utility function for direct access
+export const getDb = () => {
+  if (!mongoose.connection.db) {
+    throw new Error("Database not connected");
+  }
+  return mongoose.connection.db;
+};

@@ -14,10 +14,11 @@ interface WhatsAppAuthSession {
 interface Session {
   id: string;
   ws: WebSocket;
-  client?: Client;
+  client: Client;
   status: 'pending' | 'authenticated' | 'ready';
   phoneNumber?: string;
-  lastActive: Date;
+  qrCode?: string;
+  lastActive?: Date;
 }
 
 export class WhatsAppService {
@@ -28,26 +29,11 @@ export class WhatsAppService {
   constructor() {}
 
   public async createNewSession(ws: WebSocket): Promise<string> {
-    if (this.client) {
-      await this.safeDestroyClient();
-    }
-
     const sessionId = `session_${Date.now()}`;
-    const newSession: Session = {
-      id: sessionId,
-      ws,
-      status: 'pending',
-      lastActive: new Date()
-    };
+    const clientId = `client_${sessionId}`;
 
-    this.sessions.push(newSession);
-    await this.initializeWhatsAppClient(sessionId);
-    return sessionId;
-  }
-
-  private async initializeWhatsAppClient(sessionId: string): Promise<void> {
-    this.client = new Client({
-      authStrategy: new LocalAuth({ clientId: sessionId }),
+    const client = new Client({
+      authStrategy: new LocalAuth({ clientId }),
       puppeteer: {
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -58,15 +44,24 @@ export class WhatsAppService {
       }
     });
 
-    this.setupEventListeners(sessionId);
+    const newSession: Session = {
+      id: sessionId,
+      ws,
+      client,
+      status: 'pending',
+      lastActive: new Date()
+    };
+
+    this.sessions.push(newSession);
+    this.setupEventListeners(client, sessionId);
     
     try {
-      await this.client.initialize();
-      this.updateSession(sessionId, { client });
+      await client.initialize();
       await this.persistSession({
         sessionId,
         clientId,
-        status: 'pending'
+        status: 'pending',
+        lastActive: new Date()
       });
       return sessionId;
     } catch (error) {
@@ -96,7 +91,7 @@ export class WhatsAppService {
           
           this.sessions.push({
             id: sessionId,
-            ws,
+            ws: null as unknown as WebSocket,
             client,
             status: "ready",
             phoneNumber: dbSession.phoneNumber,
@@ -114,123 +109,182 @@ export class WhatsAppService {
     }
   }
 
-  private setupEventListeners(sessionId: string): void {
+  private setupEventListeners(client: Client, sessionId: string): void {
+    if (!client) {
+        console.error('Cannot setup listeners - client is null');
+        return;
+    }
 
-    if (!this.client) return;
-     // QR Code Generation - using string type instead of QRCode
-     this.client.on('qr', (qr: string) => {
+    // Store reference to client
+    this.client = client;
+
+    // Debugging: Log all events for troubleshooting
+    client.on('*', (event) => {
+        console.debug(`[${sessionId}] Event: ${event}`);
+    });
+
+    // QR Code Generation
+    client.on('qr', async (qr: string) => {
       console.log(`QR received for session ${sessionId}`);
+      
       this.currentQr = qr;
-      this.updateSession(sessionId, { lastActive: new Date() });
-      this.sendToSession(sessionId, {
-        action: 'qr',
-        qrCode: qr,
-        sessionId
-      });
-      this.persistSession({
+      
+      const sessionData = {
         sessionId,
-        clientId: client.options.authStrategy.options.clientId,
-        status: 'pending',
-        qrCode: qr
-      });
+        clientId: this.getClientId(client) || 'pending',
+        status: 'pending' as const,
+        qrCode: qr,  // This is now allowed
+        lastActive: new Date()
+      };
+    
+      try {
+        // Update in-memory session - now type-safe
+        this.updateSession(sessionId, { 
+          qrCode: qr,
+          lastActive: new Date(),
+          status: 'pending'
+        });
+    
+        // Persist to database
+        const dbResult = await this.persistSession(sessionData);
+        console.log('Session persisted:', dbResult);
+    
+        // Send to client
+        this.sendToSession(sessionId, {
+          action: 'qr',
+          qrCode: qr,
+          sessionId
+        });
+      } catch (error) {
+        console.error('QR handling failed:', error);
+      }
     });
 
     // Authentication
-    this.client.on('authenticated', async (session: unknown) => {
-      const authSession = session as WhatsAppAuthSession;
-      const phoneNumber = authSession?.wid?.user || undefined;
-      const serialized = authSession?.wid?._serialized || '';
+    client.on('authenticated', async (session: unknown) => {
+        const authSession = session as WhatsAppAuthSession;
+        const phoneNumber = authSession?.wid?.user || undefined;
+        const serialized = authSession?.wid?._serialized || '';
 
-      console.log(`Authenticated: ${phoneNumber || 'Unknown number'}`);
+        console.log(`Authenticated: ${phoneNumber || 'Unknown number'}`);
 
-      await this.persistSession({
-        sessionId,
-        clientId: client.options.authStrategy.options.clientId,
-        status: 'authenticated',
-        phoneNumber
-      });
+        try {
+            // Update database
+            await this.persistSession({
+                sessionId,
+                clientId: this.getClientId(client),
+                status: 'authenticated',
+                phoneNumber,
+                lastActive: new Date()
+            });
 
-      this.updateSession(sessionId, {
-        status: 'authenticated',
-        phoneNumber,
-        lastActive: new Date()
-      });
+            // Update in-memory session
+            this.updateSession(sessionId, {
+                status: 'authenticated',
+                phoneNumber,
+                lastActive: new Date()
+            });
 
-      this.sendToSession(sessionId, {
-        action: 'authenticated',
-        sessionId,
-        phoneNumber,
-        serializedId: serialized
-      });
+            // Notify client
+            this.sendToSession(sessionId, {
+                action: 'authenticated',
+                sessionId,
+                phoneNumber,
+                serializedId: serialized
+            });
+        } catch (error) {
+            console.error('Authentication handling failed:', error);
+        }
     });
 
     // Ready State
-    this.client.on('ready', async () => {
-      console.log(`Client ready (${sessionId})`);
+    client.on('ready', async () => {
+        console.log(`Client ready (${sessionId})`);
+        console.log('Client info:', client.info);
 
-      await this.persistSession({
-        sessionId,
-        clientId: client.options.authStrategy.options.clientId,
-        status: 'ready',
-        lastActive: new Date()
-      });
+        try {
+            // Update database
+            await this.persistSession({
+                sessionId,
+                clientId: this.getClientId(client),
+                status: 'ready',
+                lastActive: new Date()
+            });
 
-      this.updateSession(sessionId, {
-        status: 'ready',
-        lastActive: new Date()
-      });
+            // Update in-memory session
+            this.updateSession(sessionId, {
+                status: 'ready',
+                lastActive: new Date()
+            });
 
-      this.sendToSession(sessionId, {
-        action: 'ready',
-        sessionId,
-        timestamp: new Date().toISOString()
-      });
+            // Notify client
+            this.sendToSession(sessionId, {
+                action: 'ready',
+                sessionId,
+                timestamp: new Date().toISOString()
+            });
+        } catch (error) {
+            console.error('Ready state handling failed:', error);
+        }
     });
 
-    // Message Handling
-    this.client.on('message', (msg: Message) => {
-      if (msg.fromMe) return;
-
-      console.log(`New message from ${msg.from}: ${msg.body}`);
-      this.sendToSession(sessionId, {
-        action: 'message',
-        sessionId,
-        from: msg.from,
-        body: msg.body,
-        timestamp: msg.timestamp
-      });
+    // Message Handling (unchanged)
+    client.on('message', (msg: Message) => {
+        if (msg.fromMe) return;
+        console.log(`New message from ${msg.from}: ${msg.body}`);
+        this.sendToSession(sessionId, {
+            action: 'message',
+            sessionId,
+            from: msg.from,
+            body: msg.body,
+            timestamp: msg.timestamp
+        });
     });
 
     // Disconnection
-    this.client.on('disconnected', (reason: string) => {
-      console.log(`Disconnected (${reason})`);
-      this.sendToSession(sessionId, {
-        action: 'disconnected',
-        sessionId,
-        reason,
-        timestamp: new Date().toISOString()
-      });
-      this.cleanupSession(sessionId);
+    client.on('disconnected', (reason: string) => {
+        console.log(`Disconnected (${reason})`);
+        this.sendToSession(sessionId, {
+            action: 'disconnected',
+            sessionId,
+            reason,
+            timestamp: new Date().toISOString()
+        });
+        this.cleanupSession(sessionId);
     });
 
     // Error Handling
-    this.client.on('auth_failure', (msg: string) => {
-      console.error(`Auth failure: ${msg}`);
-      this.sendToSession(sessionId, {
-        action: 'auth_failure',
-        sessionId,
-        message: msg
-      });
+    client.on('auth_failure', (msg: string) => {
+        console.error(`Auth failure: ${msg}`);
+        this.sendToSession(sessionId, {
+            action: 'auth_failure',
+            sessionId,
+            message: msg
+        });
     });
 
-    this.client.on('change_state', (state: string) => {
-      console.log(`State changed: ${state}`);
-      this.sendToSession(sessionId, {
-        action: 'state_change',
-        sessionId,
-        state
-      });
+    client.on('change_state', (state: string) => {
+        console.log(`State changed: ${state}`);
+        this.sendToSession(sessionId, {
+            action: 'state_change',
+            sessionId,
+            state
+        });
     });
+}
+
+  private getClientId(client: Client): string {
+  
+    if (client.info?.wid?._serialized) {
+      return client.info.wid._serialized;
+    }
+    
+    const authStrategy = (client as any).options?.authStrategy?.options;
+    if (authStrategy?.clientId) {
+      return authStrategy.clientId;
+    }
+
+    return 'unknown-client-id';
   }
 
   private async persistSession(sessionData: {
@@ -239,12 +293,57 @@ export class WhatsAppService {
     status: 'pending' | 'authenticated' | 'ready';
     phoneNumber?: string;
     qrCode?: string;
+    lastActive: Date;
   }) {
-    await DBSession.findOneAndUpdate(
-      { sessionId: sessionData.sessionId },
-      sessionData,
-      { upsert: true }
-    );
+    try {
+      // Get the client from active sessions
+      const session = this.sessions.find(s => s.id === sessionData.sessionId);
+      if (!session) {
+        console.warn(`Session ${sessionData.sessionId} not found in active sessions`);
+        return;
+      }
+  
+      // Safely access client ID with fallbacks
+      const clientId = session?.client?.info?.wid?._serialized 
+        || sessionData.clientId 
+        || 'unknown';
+  
+      if (!clientId) {
+        throw new Error('Unable to determine client ID for session persistence');
+      }
+  
+      const updateData = {
+        ...sessionData,
+        clientId,
+        lastActive: sessionData.lastActive || new Date()
+      };
+  
+      await DBSession.findOneAndUpdate(
+        { sessionId: sessionData.sessionId },
+        updateData,
+        { upsert: true, new: true }
+      );
+  
+      console.log(`Session ${sessionData.sessionId} persisted successfully`);
+    } catch (error) {
+      console.error('Failed to persist session:', error);
+      throw error; 
+    }
+  }
+
+  private async removePersistedSession(sessionId: string) {
+    await DBSession.deleteOne({ sessionId });
+  }
+
+  private sendToSession(sessionId: string, data: any): void {
+    const session = this.sessions.find(s => s.id === sessionId);
+    if (!session || !session.ws || session.ws.readyState !== WebSocket.OPEN) return;
+
+    try {
+      session.ws.send(JSON.stringify(data));
+    } catch (error) {
+      console.error('Error sending to WebSocket:', error);
+    }
   }
 
   private async safeDestroyClient(): Promise<void> {
@@ -256,17 +355,6 @@ export class WhatsAppService {
       console.error('Error destroying client:', error);
     } finally {
       this.client = null;
-    }
-  }
-
-  private sendToSession(sessionId: string, data: any): void {
-    const session = this.sessions.find(s => s.id === sessionId);
-    if (!session || session.ws.readyState !== WebSocket.OPEN) return;
-
-    try {
-      session.ws.send(JSON.stringify(data));
-    } catch (error) {
-      console.error('Error sending to WebSocket:', error);
     }
   }
 

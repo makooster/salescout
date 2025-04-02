@@ -22,10 +22,8 @@ export const logoutUser = async (req: Request, res: Response) => {
   try {
     const { sessionId } = req.body;
     
-    // Remove from database
     await Session.deleteOne({ sessionId });
-    
-    // Cleanup in WhatsAppService
+  
     whatsappService.cleanupSession(sessionId);
     
     res.json({ success: true });

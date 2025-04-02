@@ -6,6 +6,7 @@ interface ISession extends Document {
   status: "pending" | "authenticated" | "ready";
   phoneNumber?: string;
   qrCode?: string;
+  clientId: string;
   lastActive: Date;
 }
 
@@ -17,7 +18,8 @@ const sessionSchema = new Schema<ISession>({
     clientId: { type: String, required: true },
     lastActive: { type: Date, default: Date.now }
   }, {
-    timestamps: true
+    timestamps: true,
+    collection: 'wa_bot'
   });
   
   export const Session = model<ISession>("Session", sessionSchema);

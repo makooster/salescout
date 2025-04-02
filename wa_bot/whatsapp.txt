@@ -1,0 +1,65 @@
+import { Client, LocalAuth } from 'whatsapp-web.js';
+import { WebSocket } from 'ws';
+
+interface User {
+  phoneNumber: string;
+  status: string;
+}
+
+export class WhatsAppService {
+  private client: Client;
+  private userSessions: { [key: string]: WebSocket } = {};
+  private users: User[] = [];
+
+  constructor() {
+    this.client = new Client({
+      authStrategy: new LocalAuth(),
+    });
+
+    this.setupListeners();
+  }
+
+  // Listeners for QR code generation and ready event
+  private setupListeners() {
+    this.client.on('qr', (qr) => {
+      console.log('QR Code generated:', qr);
+      this.sendQRCodeToClients(qr); // Send the QR code to all connected WebSocket clients
+    });
+
+    this.client.on('ready', () => {
+      console.log('WhatsApp Web is ready!');
+    });
+
+    this.client.on('message', async (message) => {
+      console.log(`Received message from ${message.from}: ${message.body}`);
+    });
+
+    this.client.initialize();
+  }
+
+  // Send QR code to all connected WebSocket clients
+  private sendQRCodeToClients(qr: string) {
+    for (let ws of Object.values(this.userSessions)) {
+      ws.send(JSON.stringify({ action: 'qr', qrCode: qr }));
+    }
+  }
+
+  // Initialize WhatsApp session and assign WebSocket connection
+  initializeWhatsAppSession(ws: WebSocket, phoneNumber: string) {
+    this.userSessions[phoneNumber] = ws; // Store WebSocket connection by phone number
+    this.users.push({ phoneNumber, status: 'pending' }); // Add user to the list of pending users
+    this.client.initialize(); // Start WhatsApp client to generate QR code
+  }
+
+  // Mark user as authenticated
+  authenticateUser(phoneNumber: string) {
+    const user = this.users.find(user => user.phoneNumber === phoneNumber);
+    if (user) {
+      user.status = 'authenticated'; // Mark user as authenticated after QR scan
+    }
+  }
+
+  getAuthorizedUsers() {
+    return this.users.filter(user => user.status === 'authenticated');
+  }
+}

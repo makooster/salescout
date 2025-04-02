@@ -9,16 +9,30 @@ import cors from 'cors';
 const app = express();
 const server = http.createServer(app);
 
-connectDB().then(async () => {
-  // Load persisted sessions after DB connection is established
-  await whatsappService.loadPersistedSessions();
+async function startServer() {
+  try {
 
-  // Start your server
-  const PORT = process.env.PORT || 3000;
-  server.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-  });
-});
+    await connectDB();
+      
+    await whatsappService.loadPersistedSessions();
+  
+    createWebSocketServer(server);
+  
+    const PORT = process.env.PORT || 3000;
+    server.listen(PORT, () => {
+      console.log(`
+        🚀 HTTP server running on http://localhost:${PORT}
+        📡 WebSocket server ready on ws://localhost:${PORT}
+      `);
+    });
+    
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
 
 // Enhanced CORS configuration
 app.use(cors({
@@ -43,9 +57,6 @@ app.get('/health', (req, res) => {
 // API endpoints
 app.get('/api/authorized-users', getAuthorizedUsers);
 
-// WebSocket server setup
-createWebSocketServer(server);
-
 // Graceful shutdown handling
 process.on('SIGTERM', () => {
   console.log('SIGTERM received. Shutting down gracefully...');
@@ -69,20 +80,6 @@ process.on('SIGINT', () => {
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Error:', err.stack);
   res.status(500).json({ error: 'Internal Server Error' });
-});
-
-// Start the server
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`
-  🚀 Server running on http://localhost:${PORT}
-  📡 WebSocket server ready on ws://localhost:${PORT}
-  `);
-  
-  // Optional: Initialize WhatsApp service with dummy session for testing
-  if (process.env.NODE_ENV === 'development') {
-    console.log('Development mode: WhatsApp service available');
-  }
 });
 
 
