@@ -31,7 +31,7 @@ const App: React.FC = () => {
   const [isConnected, setIsConnected] = useState(false);
 
   // Unified data fetching function
-  const fetchAppData = useCallback(async () => {
+  const fetchAppData = useCallback(async (showQRCodes = false) => {
     try {
       setLoading(true);
       const [sessionsRes, usersRes] = await Promise.all([
@@ -46,6 +46,15 @@ const App: React.FC = () => {
 
       setAccounts(sessions);
       setAuthorizedUsers(users);
+      
+      if (showQRCodes) {
+        const pendingSessions = sessions.filter((s: any) => s.status === 'pending');
+        setQrCards(pendingSessions.map((s: any) => ({
+          id: s.sessionId,
+          qrUrl: s.qrCode,
+          sessionId: s.sessionId
+        })));
+      }
 
       // Handle pending sessions with QR codes
       const pendingSessions = sessions.filter((s: any) => s.status === 'pending');
@@ -102,7 +111,7 @@ const App: React.FC = () => {
           case "authenticated":
             message.success("✅ Авторизация успешна!");
             setQrCards(prev => prev.filter(qr => qr.sessionId !== data.sessionId));
-            fetchAppData(); // Refresh data
+            fetchAppData(); 
             break;
             
           case "session_created":
@@ -113,7 +122,7 @@ const App: React.FC = () => {
           case "sessions_update":
           case "authorized_users":
           case "sessions_validated":
-            fetchAppData(); // Refresh data
+            fetchAppData(); 
             break;
             
           case "error":
@@ -145,12 +154,13 @@ const App: React.FC = () => {
   // Initialize connection and data loading
   useEffect(() => {
     const socket = connectWebSocket();
+    fetchAppData(false); 
     return () => {
       if (socket.readyState === WebSocket.OPEN) {
         socket.close();
       }
     };
-  }, [connectWebSocket]);
+  }, [connectWebSocket, fetchAppData]);
 
   // Handle adding new account
   const handleAddAccount = () => {
@@ -164,16 +174,36 @@ const App: React.FC = () => {
 
   // Handle logout
   const handleLogout = async (sessionId: string) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      message.error("WebSocket connection not available");
+      return;
+    }
+  
     try {
-      await fetch(`${API_URL}/api/sessions/${sessionId}`, { method: 'DELETE' });
-      ws.send(JSON.stringify({ action: "delete_session", sessionId }));
-      fetchAppData(); // Refresh data
-      message.success("Сессия успешно удалена");
+      const deleteResponse = await fetch(`${API_URL}/api/sessions/${sessionId}`, { 
+        method: 'DELETE' 
+      });
+      
+      if (!deleteResponse.ok) {
+        throw new Error('Failed to delete session');
+      }
+  
+      // Notify WebSocket
+      ws.send(JSON.stringify({ 
+        action: "delete_session", 
+        sessionId 
+      }));
+  
+      // Optimistic UI update
+      setAccounts(prev => prev.filter(acc => acc.sessionId !== sessionId));
+      setAuthorizedUsers(prev => prev.filter(user => user.sessionId !== sessionId));
+  
+      message.success("Session successfully deleted");
     } catch (error) {
-      console.error("Error deleting session:", error);
-      message.error("Ошибка при удалении сессии");
+      console.error("Logout failed:", error);
+      message.error(error instanceof Error ? error.message : "Logout failed");
+      
+      await fetchAppData();
     }
   };
 
@@ -182,15 +212,11 @@ const App: React.FC = () => {
     setQrCards(prev => prev.filter(qr => qr.id !== id));
   };
 
-  // Filter out authorized users from accounts
-  const nonAuthorizedAccounts = accounts.filter(
-    acc => !authorizedUsers.some(u => u.id === acc.id)
-  );
-
   return (
     <div style={{ padding: 20 }}>
+      {/* Accounts Section */}
       <Row gutter={[16, 16]} justify="center">
-        {/* Authorized users */}
+        {/* Authorized Users */}
         {authorizedUsers.map(user => (
           <Col key={user.id} xs={24} sm={12} md={8} lg={6}>
             <AccountCard 
@@ -198,22 +224,27 @@ const App: React.FC = () => {
               number={user.number}
               status={user.status}
               onLogout={() => handleLogout(user.sessionId)}
+              sessionId={user.sessionId}
             />
           </Col>
         ))}
         
-        {/* Other sessions */}
-        {nonAuthorizedAccounts.map(acc => (
-          <Col key={acc.id} xs={24} sm={12} md={8} lg={6}>
-            <AccountCard 
-              name={acc.name}
-              number={acc.number}
-              status={acc.status}
-              onLogout={() => handleLogout(acc.sessionId)}
-            />
-          </Col>
-        ))}
+        {/* Other Sessions */}
+        {accounts
+          .filter(acc => !authorizedUsers.some(u => u.id === acc.id))
+          .map(acc => (
+            <Col key={acc.id} xs={24} sm={12} md={8} lg={6}>
+              <AccountCard 
+                name={acc.name}
+                number={acc.number}
+                status={acc.status}
+                onLogout={() => handleLogout(acc.sessionId)}
+                sessionId={acc.sessionId}
+              />
+            </Col>
+          ))}
         
+        {/* Add Account Button */}
         <Col xs={24} sm={12} md={8} lg={6}>
           <Card style={{ textAlign: "center", borderRadius: 12 }}>
             <Button 
@@ -228,12 +259,15 @@ const App: React.FC = () => {
           </Card>
         </Col>
       </Row>
-
+  
+      {/* QR Codes Section */}
       {qrCards.length > 0 && (
-        <>
-          <h2 style={{ marginTop: 30, textAlign: "center" }}>Сгенерированные QR-коды</h2>
+        <div>
+          <h2 style={{ marginTop: 30, textAlign: "center" }}>
+            Сгенерированные QR-коды
+          </h2>
           <Row gutter={[16, 16]} justify="center">
-            {qrCards.map((qr) => (
+            {qrCards.map(qr => (
               <Col key={qr.id} xs={24} sm={12} md={8} lg={6}>
                 <QRCard 
                   qrUrl={qr.qrUrl} 
@@ -242,9 +276,10 @@ const App: React.FC = () => {
               </Col>
             ))}
           </Row>
-        </>
+        </div>
       )}
-
+  
+      {/* Warming Switch */}
       <div style={{ marginTop: 20, textAlign: "center" }}>
         <Switch checked={warming} onChange={setWarming} /> Вкл. Прогрев
       </div>

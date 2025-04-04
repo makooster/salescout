@@ -1,22 +1,20 @@
-// src/config/db.ts
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-// Simple connection string with enforced database name
 const MONGO_URI = process.env.MONGO_URI 
   ? process.env.MONGO_URI.replace(/(mongodb(\+srv)?:\/\/[^/]+)(\/[^?]*)?(\?|$)/, '$1/wa_web_user_sessions$4')
   : "mongodb://localhost:27017/wa_web_user_sessions?retryWrites=true&w=majority";
 
 export const connectDB = async () => {
   try {
-    // Development-only debug logging
     if (process.env.NODE_ENV !== 'production') {
       mongoose.set('debug', (collectionName, method, query) => {
-        if (collectionName === 'wa_bot') {
-          console.log(`📦 ${collectionName}.${method}`, query);
+        if (method === 'find' && collectionName === 'wa_bot') {
+          return false;
         }
+        console.log(`📦 ${collectionName}.${method}`, query);
       });
     }
 

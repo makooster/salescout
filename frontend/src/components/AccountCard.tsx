@@ -6,14 +6,15 @@ import {
   LogoutOutlined,
   QuestionCircleOutlined
 } from '@ant-design/icons';
+import { useState } from 'react';
 import '../styles/AccountCard.css';
 
 interface AccountCardProps {
   name: string;
   number: string;
   status: 'pending' | 'authenticated' | 'ready';
-  onLogout: () => void;
-  loading?: boolean;
+  onLogout: (sessionId: string) => Promise<void>;
+  sessionId: string;
 }
 
 const AccountCard: React.FC<AccountCardProps> = ({ 
@@ -21,8 +22,19 @@ const AccountCard: React.FC<AccountCardProps> = ({
   number, 
   status, 
   onLogout,
-  loading = false
+  sessionId
 }) => {
+  const [logoutLoading, setLogoutLoading] = useState(false);
+
+  const handleConfirmLogout = async () => {
+    try {
+      setLogoutLoading(true);
+      await onLogout(sessionId);
+    } finally {
+      setLogoutLoading(false);
+    }
+  };
+
   const statusConfig = {
     ready: {
       icon: <CheckCircleOutlined />,
@@ -59,17 +71,18 @@ const AccountCard: React.FC<AccountCardProps> = ({
         <Popconfirm
           title="Are you sure you want to logout?"
           icon={<QuestionCircleOutlined style={{ color: 'red' }} />}
-          onConfirm={onLogout}
+          onConfirm={handleConfirmLogout}
           okText="Yes"
           cancelText="No"
           placement="topRight"
+          okButtonProps={{ loading: logoutLoading }}
         >
           <Tooltip title="Logout">
             <Button 
               type="primary" 
               danger
               icon={<LogoutOutlined />}
-              loading={loading}
+              loading={logoutLoading}
               style={{ padding: '0 12px', height: '32px' }}
             />
           </Tooltip>

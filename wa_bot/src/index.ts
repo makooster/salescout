@@ -1,5 +1,5 @@
 import { createWebSocketServer } from './websocket/websocketServer';
-import { getAuthorizedUsers, getAllSessions} from './controllers/userController';
+import { getAuthorizedUsers, getAllSessions, deleteSession} from './controllers/userController';
 import { connectDB, disconnectDB } from "./config/db";
 import { whatsappService } from './services/whatsappInstance';
 import express from 'express';
@@ -37,7 +37,7 @@ startServer();
 // Enhanced CORS configuration
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'OPTIONS', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
@@ -57,6 +57,7 @@ app.get('/health', (req, res) => {
 // API endpoints
 app.get('/api/authorized-users', getAuthorizedUsers);
 app.get('/api/sessions', getAllSessions);
+app.delete('/api/sessions/:sessionId', deleteSession);
 
 // Graceful shutdown handling
 process.on('SIGTERM', () => {
