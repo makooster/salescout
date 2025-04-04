@@ -25,7 +25,7 @@ export class WhatsAppService {
   private client: Client | null = null;
   private sessions: Session[] = [];
   private currentQr: string | null = null;
-
+  public onSessionUpdate: (() => void) | null = null;
   constructor() {}
 
   public async createNewSession(ws: WebSocket): Promise<string> {
@@ -107,6 +107,25 @@ export class WhatsAppService {
     } catch (error) {
       console.error("Error loading persisted sessions:", error);
     }
+  }
+
+  private notifySessionUpdate() {
+    if (this.onSessionUpdate) {
+      this.onSessionUpdate();
+    }
+  }
+
+  public getAuthorizedUsers() {
+    return this.sessions
+      .filter(session => session.status === 'ready')
+      .map(session => ({
+        id: session.id,
+        name: session.phoneNumber || 'Unknown',
+        number: session.phoneNumber || 'Unknown',
+        status: session.status,
+        sessionId: session.id,
+        lastActive: session.lastActive
+      }));
   }
 
   private setupEventListeners(client: Client, sessionId: string): void {
@@ -199,35 +218,22 @@ export class WhatsAppService {
 
     // Ready State
     client.on('ready', async () => {
-        console.log(`Client ready (${sessionId})`);
-        console.log('Client info:', client.info);
+      console.log(`Client ready (${sessionId})`);
+      
+      const sessionData = {
+        sessionId,
+        clientId: this.getClientId(client),
+        status: 'ready' as const,
+        phoneNumber: client.info?.wid?.user || undefined,
+        lastActive: new Date()
+      };
 
-        try {
-            // Update database
-            await this.persistSession({
-                sessionId,
-                clientId: this.getClientId(client),
-                status: 'ready',
-                lastActive: new Date()
-            });
-
-            // Update in-memory session
-            this.updateSession(sessionId, {
-                status: 'ready',
-                lastActive: new Date()
-            });
-
-            // Notify client
-            this.sendToSession(sessionId, {
-                action: 'ready',
-                sessionId,
-                timestamp: new Date().toISOString()
-            });
-        } catch (error) {
-            console.error('Ready state handling failed:', error);
-        }
+      await this.persistSession(sessionData);
+      this.updateSession(sessionId, sessionData);
+      
+      // Broadcast to ALL connected clients
+      this.notifySessionUpdate();
     });
-
     // Message Handling (unchanged)
     client.on('message', (msg: Message) => {
         if (msg.fromMe) return;
@@ -358,10 +364,11 @@ export class WhatsAppService {
     }
   }
 
-  private updateSession(sessionId: string, updates: Partial<Session>): void {
+  public updateSession(sessionId: string, updates: Partial<Session>): void {
     this.sessions = this.sessions.map(session => 
       session.id === sessionId ? { ...session, ...updates } : session
     );
+    this.notifySessionUpdate();
   }
 
   public getActiveSessions(): Session[] {

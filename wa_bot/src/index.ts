@@ -1,5 +1,5 @@
 import { createWebSocketServer } from './websocket/websocketServer';
-import { getAuthorizedUsers } from './controllers/userController';
+import { getAuthorizedUsers, getAllSessions} from './controllers/userController';
 import { connectDB, disconnectDB } from "./config/db";
 import { whatsappService } from './services/whatsappInstance';
 import express from 'express';
@@ -56,6 +56,7 @@ app.get('/health', (req, res) => {
 
 // API endpoints
 app.get('/api/authorized-users', getAuthorizedUsers);
+app.get('/api/sessions', getAllSessions);
 
 // Graceful shutdown handling
 process.on('SIGTERM', () => {
