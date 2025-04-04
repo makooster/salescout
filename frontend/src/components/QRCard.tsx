@@ -4,7 +4,8 @@ import '../styles/QRCard.css';
 
 interface QRCardProps {
   qrUrl: string;
-  onClose?: () => void;
+  expiresAt?: Date;
+  onClose: () => void;
 }
 
 const QRCard: React.FC<QRCardProps> = ({ qrUrl, onClose }) => (

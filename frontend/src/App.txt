@@ -4,7 +4,21 @@ import { PlusOutlined } from "@ant-design/icons";
 import QRCard from "./components/QRCard";
 import AccountCard from "./components/AccountCard";
 
+const API_BASE_URL = "http://localhost:3000";
 const WS_URL = "ws://localhost:3000";
+
+const SESSION_STORAGE_KEY = 'whatsapp_sessions';
+
+// Save sessions to localStorage
+const saveSessions = (accounts: Account[]) => {
+  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(accounts));
+};
+
+// Load sessions from localStorage
+const loadSessions = (): Account[] => {
+  const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+  return saved ? JSON.parse(saved) : [];
+};
 
 interface Account {
   id: string;
@@ -21,13 +35,12 @@ interface QR {
 }
 
 const App: React.FC = () => {
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [authorizedUsers, setAuthorizedUsers] = useState<Account[]>([]);
+  // const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>(loadSessions());
   const [qrCards, setQrCards] = useState<QR[]>([]);
   const [warming, setWarming] = useState(false);
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [loading, setLoading] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
 
   // WebSocket connection management
   const connectWebSocket = useCallback(() => {
@@ -36,12 +49,6 @@ const App: React.FC = () => {
     socket.onopen = () => {
       message.success("🔗 WebSocket подключен!");
       setWs(socket);
-      setIsConnected(true);
-      
-      // Request initial data
-      socket.send(JSON.stringify({ 
-        action: "get_initial_data" 
-      }));
     };
 
     socket.onmessage = (event) => {
@@ -64,20 +71,13 @@ const App: React.FC = () => {
           message.success("✅ Авторизация успешна!");
           setQrCards(prev => prev.filter(qr => qr.sessionId !== data.sessionId));
         }
-        else if (data.action === "authorized_users") {
-          setAuthorizedUsers(data.users);
+        else if (data.action === "ready") {
+          message.success("✅ WhatsApp готов к использованию!");
+          fetchAccounts();
         }
         else if (data.action === "session_created") {
           setLoading(false);
           message.success("Сессия создана. Ожидайте QR-код...");
-        }
-        else if (data.action === "sessions_update") {
-          setAccounts(data.sessions);
-        } 
-        else if (data.action === "sessions_validated") {
-          const { validSessions } = data;
-          setAccounts(validSessions);
-          localStorage.setItem('last_sessions', JSON.stringify(validSessions));
         }
         else if (data.action === "error") {
           setLoading(false);
@@ -89,67 +89,53 @@ const App: React.FC = () => {
     };
 
     socket.onerror = (error) => {
+      message.error("⚠ Ошибка WebSocket");
       console.error("WebSocket error:", error);
-      if (!isConnected) {
-        message.error("⚠ Ошибка подключения к WebSocket");
-      }
     };
 
     socket.onclose = () => {
-      setIsConnected(false);
       message.warning("⚠ WebSocket отключен. Переподключение...");
       setTimeout(connectWebSocket, 5000);
     };
 
-    return socket;
-  }, [isConnected]);
+    setWs(socket);
+    return () => socket.close();
+  }, []);
 
-  // Initialize WebSocket connection
-  useEffect(() => {
-    const socket = connectWebSocket();
-    return () => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close();
-      }
-    };
-  }, [connectWebSocket]);
+  // Fetch authorized accounts
+  const fetchAccounts = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/authorized-users`);
+      const data: Account[] = await response.json();
+      setAccounts(data);
+    } catch (error) {
+      console.error("Ошибка загрузки аккаунтов", error);
+      message.error("Не удалось загрузить аккаунты");
+    }
+  }, []);
 
+  // Initialize connection and data
   useEffect(() => {
-    if (accounts.length > 0) {
-      localStorage.setItem('last_sessions', JSON.stringify(accounts));
-    } else {
-      localStorage.removeItem('last_sessions');
-    }
-  }, [accounts]);
-  
-  useEffect(() => {
-    if (accounts.length > 0) {
-      localStorage.setItem('last_sessions', JSON.stringify(accounts));
-    }
-  }, [accounts]);
+    connectWebSocket();
+    fetchAccounts();
+  }, [connectWebSocket, fetchAccounts]);
 
   // Handle adding new account
   const handleAddAccount = () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      message.error("WebSocket не подключен");
+      message.error("❌ WebSocket не подключен!");
       return;
     }
 
     setLoading(true);
-    ws.send(JSON.stringify({ action: "create_session" }));
-  };
-
-  // Handle logout
-  const handleLogout = (sessionId: string) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      message.error("WebSocket не подключен");
-      return;
+    try {
+      ws.send(JSON.stringify({ action: "create_session" }));
+      message.loading("⏳ Создание сессии...");
+    } catch (error) {
+      setLoading(false);
+      message.error("Ошибка при создании сессии");
+      console.error(error);
     }
-
-    ws.send(JSON.stringify({ 
-      action: "delete_session", 
-      sessionId 
-    }));
   };
 
   // Handle QR close
@@ -160,31 +146,16 @@ const App: React.FC = () => {
   return (
     <div style={{ padding: 20 }}>
       <Row gutter={[16, 16]} justify="center">
-        {/* Display authorized users first */}
-        {authorizedUsers.map(user => (
-          <Col key={user.id} xs={24} sm={12} md={8} lg={6}>
+        {accounts.map((acc) => (
+          <Col key={acc.id} xs={24} sm={12} md={8} lg={6}>
             <AccountCard 
-              name={user.name}
-              number={user.number}
-              status={user.status}
-              onLogout={() => handleLogout(user.sessionId)}
+              name={acc.name}
+              number={acc.number}
+              status={acc.status}
+              onLogout={() => console.log("Выход", acc.number)} 
             />
           </Col>
         ))}
-        
-        {/* Display other sessions */}
-        {accounts
-          .filter(acc => !authorizedUsers.some(u => u.id === acc.id))
-          .map(acc => (
-            <Col key={acc.id} xs={24} sm={12} md={8} lg={6}>
-              <AccountCard 
-                name={acc.name}
-                number={acc.number}
-                status={acc.status}
-                onLogout={() => handleLogout(acc.sessionId)}
-              />
-            </Col>
-          ))}
         
         <Col xs={24} sm={12} md={8} lg={6}>
           <Card style={{ textAlign: "center", borderRadius: 12 }}>
@@ -193,7 +164,7 @@ const App: React.FC = () => {
               icon={<PlusOutlined />} 
               block 
               onClick={handleAddAccount}
-              disabled={loading || !isConnected}
+              disabled={loading}
             >
               {loading ? <Spin size="small" /> : 'Добавить аккаунт'}
             </Button>
