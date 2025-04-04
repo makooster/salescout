@@ -109,6 +109,20 @@ export class WhatsAppService {
     }
   }
 
+
+  public async getActiveSessionsForAPI() {
+    return this.sessions.map(session => ({
+      id: session.id,
+      status: session.status,
+      phoneNumber: session.phoneNumber,
+      lastActive: session.lastActive
+    }));
+  }
+
+  public async getPersistedSessionsForAPI() {
+    return await DBSession.find({});
+  }
+
   private notifySessionUpdate() {
     if (this.onSessionUpdate) {
       this.onSessionUpdate();

@@ -5,6 +5,7 @@ import QRCard from "./components/QRCard";
 import AccountCard from "./components/AccountCard";
 
 const WS_URL = "ws://localhost:3000";
+const API_URL = "http://localhost:3000";
 
 interface Account {
   id: string;
@@ -29,6 +30,47 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
 
+  // Unified data fetching function
+  const fetchAppData = useCallback(async () => {
+    try {
+      setLoading(true);
+      const [sessionsRes, usersRes] = await Promise.all([
+        fetch(`${API_URL}/api/sessions`),
+        fetch(`${API_URL}/api/authorized-users`)
+      ]);
+      
+      const [sessions, users] = await Promise.all([
+        sessionsRes.json(),
+        usersRes.json()
+      ]);
+
+      setAccounts(sessions);
+      setAuthorizedUsers(users);
+
+      // Handle pending sessions with QR codes
+      const pendingSessions = sessions.filter((s: any) => s.status === 'pending');
+      setQrCards(pendingSessions.map((s: any) => ({
+        id: s.sessionId,
+        qrUrl: s.qrCode,
+        sessionId: s.sessionId
+      })));
+
+      // Update localStorage
+      localStorage.setItem('last_sessions', JSON.stringify(sessions));
+    } catch (error) {
+      console.error('Failed to fetch data:', error);
+      message.error('Failed to load sessions');
+      
+      // Fallback to localStorage if API fails
+      const lastSessions = localStorage.getItem('last_sessions');
+      if (lastSessions) {
+        setAccounts(JSON.parse(lastSessions));
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   // WebSocket connection management
   const connectWebSocket = useCallback(() => {
     const socket = new WebSocket(WS_URL);
@@ -37,51 +79,47 @@ const App: React.FC = () => {
       message.success("🔗 WebSocket подключен!");
       setWs(socket);
       setIsConnected(true);
-      
-      // Request initial data
-      socket.send(JSON.stringify({ 
-        action: "get_initial_data" 
-      }));
+      fetchAppData(); // Initial data load
     };
 
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         
-        if (data.action === "qr") {
-          message.destroy();
-          message.info("📲 QR-код получен. Отсканируйте для входа!");
-          setQrCards(prev => [
-            ...prev, 
-            { 
-              id: data.sessionId || Date.now().toString(), 
-              qrUrl: data.qrCode,
-              sessionId: data.sessionId
-            }
-          ]);
-        }
-        else if (data.action === "authenticated") {
-          message.success("✅ Авторизация успешна!");
-          setQrCards(prev => prev.filter(qr => qr.sessionId !== data.sessionId));
-        }
-        else if (data.action === "authorized_users") {
-          setAuthorizedUsers(data.users);
-        }
-        else if (data.action === "session_created") {
-          setLoading(false);
-          message.success("Сессия создана. Ожидайте QR-код...");
-        }
-        else if (data.action === "sessions_update") {
-          setAccounts(data.sessions);
-        } 
-        else if (data.action === "sessions_validated") {
-          const { validSessions } = data;
-          setAccounts(validSessions);
-          localStorage.setItem('last_sessions', JSON.stringify(validSessions));
-        }
-        else if (data.action === "error") {
-          setLoading(false);
-          message.error(data.message || "Произошла ошибка");
+        switch (data.action) {
+          case "qr":
+            message.info("📲 QR-код получен. Отсканируйте для входа!");
+            setQrCards(prev => [
+              ...prev, 
+              { 
+                id: data.sessionId || Date.now().toString(), 
+                qrUrl: data.qrCode,
+                sessionId: data.sessionId
+              }
+            ]);
+            break;
+            
+          case "authenticated":
+            message.success("✅ Авторизация успешна!");
+            setQrCards(prev => prev.filter(qr => qr.sessionId !== data.sessionId));
+            fetchAppData(); // Refresh data
+            break;
+            
+          case "session_created":
+            setLoading(false);
+            message.success("Сессия создана. Ожидайте QR-код...");
+            break;
+            
+          case "sessions_update":
+          case "authorized_users":
+          case "sessions_validated":
+            fetchAppData(); // Refresh data
+            break;
+            
+          case "error":
+            setLoading(false);
+            message.error(data.message || "Произошла ошибка");
+            break;
         }
       } catch (error) {
         console.error("Ошибка обработки сообщения:", error);
@@ -102,9 +140,9 @@ const App: React.FC = () => {
     };
 
     return socket;
-  }, [isConnected]);
+  }, [isConnected, fetchAppData]);
 
-  // Initialize WebSocket connection
+  // Initialize connection and data loading
   useEffect(() => {
     const socket = connectWebSocket();
     return () => {
@@ -114,42 +152,29 @@ const App: React.FC = () => {
     };
   }, [connectWebSocket]);
 
-  useEffect(() => {
-    if (accounts.length > 0) {
-      localStorage.setItem('last_sessions', JSON.stringify(accounts));
-    } else {
-      localStorage.removeItem('last_sessions');
-    }
-  }, [accounts]);
-  
-  useEffect(() => {
-    if (accounts.length > 0) {
-      localStorage.setItem('last_sessions', JSON.stringify(accounts));
-    }
-  }, [accounts]);
-
   // Handle adding new account
   const handleAddAccount = () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       message.error("WebSocket не подключен");
       return;
     }
-
     setLoading(true);
     ws.send(JSON.stringify({ action: "create_session" }));
   };
 
   // Handle logout
-  const handleLogout = (sessionId: string) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      message.error("WebSocket не подключен");
-      return;
-    }
+  const handleLogout = async (sessionId: string) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    ws.send(JSON.stringify({ 
-      action: "delete_session", 
-      sessionId 
-    }));
+    try {
+      await fetch(`${API_URL}/api/sessions/${sessionId}`, { method: 'DELETE' });
+      ws.send(JSON.stringify({ action: "delete_session", sessionId }));
+      fetchAppData(); // Refresh data
+      message.success("Сессия успешно удалена");
+    } catch (error) {
+      console.error("Error deleting session:", error);
+      message.error("Ошибка при удалении сессии");
+    }
   };
 
   // Handle QR close
@@ -157,10 +182,15 @@ const App: React.FC = () => {
     setQrCards(prev => prev.filter(qr => qr.id !== id));
   };
 
+  // Filter out authorized users from accounts
+  const nonAuthorizedAccounts = accounts.filter(
+    acc => !authorizedUsers.some(u => u.id === acc.id)
+  );
+
   return (
     <div style={{ padding: 20 }}>
       <Row gutter={[16, 16]} justify="center">
-        {/* Display authorized users first */}
+        {/* Authorized users */}
         {authorizedUsers.map(user => (
           <Col key={user.id} xs={24} sm={12} md={8} lg={6}>
             <AccountCard 
@@ -172,19 +202,17 @@ const App: React.FC = () => {
           </Col>
         ))}
         
-        {/* Display other sessions */}
-        {accounts
-          .filter(acc => !authorizedUsers.some(u => u.id === acc.id))
-          .map(acc => (
-            <Col key={acc.id} xs={24} sm={12} md={8} lg={6}>
-              <AccountCard 
-                name={acc.name}
-                number={acc.number}
-                status={acc.status}
-                onLogout={() => handleLogout(acc.sessionId)}
-              />
-            </Col>
-          ))}
+        {/* Other sessions */}
+        {nonAuthorizedAccounts.map(acc => (
+          <Col key={acc.id} xs={24} sm={12} md={8} lg={6}>
+            <AccountCard 
+              name={acc.name}
+              number={acc.number}
+              status={acc.status}
+              onLogout={() => handleLogout(acc.sessionId)}
+            />
+          </Col>
+        ))}
         
         <Col xs={24} sm={12} md={8} lg={6}>
           <Card style={{ textAlign: "center", borderRadius: 12 }}>
