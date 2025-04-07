@@ -30,7 +30,7 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
 
-  // Unified data fetching function
+  
   const fetchAppData = useCallback(async (showQRCodes = false) => {
     try {
       setLoading(true);
@@ -43,7 +43,7 @@ const App: React.FC = () => {
         sessionsRes.json(),
         usersRes.json()
       ]);
-
+  
       setAccounts(sessions);
       setAuthorizedUsers(users);
       
@@ -55,22 +55,12 @@ const App: React.FC = () => {
           sessionId: s.sessionId
         })));
       }
-
-      // Handle pending sessions with QR codes
-      const pendingSessions = sessions.filter((s: any) => s.status === 'pending');
-      setQrCards(pendingSessions.map((s: any) => ({
-        id: s.sessionId,
-        qrUrl: s.qrCode,
-        sessionId: s.sessionId
-      })));
-
-      // Update localStorage
+  
       localStorage.setItem('last_sessions', JSON.stringify(sessions));
     } catch (error) {
       console.error('Failed to fetch data:', error);
       message.error('Failed to load sessions');
       
-      // Fallback to localStorage if API fails
       const lastSessions = localStorage.getItem('last_sessions');
       if (lastSessions) {
         setAccounts(JSON.parse(lastSessions));
@@ -80,6 +70,13 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const allSessions = [...authorizedUsers, ...accounts].reduce((unique, session) => {
+    if (!unique.some(s => s.sessionId === session.sessionId)) {
+      unique.push(session);
+    }
+    return unique;
+  }, [] as Account[]);
+
   // WebSocket connection management
   const connectWebSocket = useCallback(() => {
     const socket = new WebSocket(WS_URL);
@@ -88,7 +85,7 @@ const App: React.FC = () => {
       message.success("🔗 WebSocket подключен!");
       setWs(socket);
       setIsConnected(true);
-      fetchAppData(); // Initial data load
+      fetchAppData(); 
     };
 
     socket.onmessage = (event) => {
@@ -107,7 +104,6 @@ const App: React.FC = () => {
               }
             ]);
             break;
-            
           case "authenticated":
             message.success("✅ Авторизация успешна!");
             setQrCards(prev => prev.filter(qr => qr.sessionId !== data.sessionId));
@@ -121,6 +117,21 @@ const App: React.FC = () => {
             
           case "sessions_update":
           case "authorized_users":
+            const allSessions = Array.isArray(data.sessions) ? data.sessions : [];
+            const uniqueSessions = allSessions.reduce((acc: Account[], session: Account) => {
+              if (!acc.some((s: Account) => s.sessionId === session.sessionId)) {
+                acc.push(session);
+              }
+              return acc;
+            }, []);
+            // Update state with the unique sessions
+            if (data.action === "sessions_update") {
+              setAccounts(uniqueSessions);
+            } else {
+              setAuthorizedUsers(uniqueSessions);
+            }
+            break;
+            
           case "sessions_validated":
             fetchAppData(); 
             break;
@@ -216,18 +227,17 @@ const App: React.FC = () => {
     <div style={{ padding: 20 }}>
       {/* Accounts Section */}
       <Row gutter={[16, 16]} justify="center">
-        {/* Authorized Users */}
-        {authorizedUsers.map(user => (
-          <Col key={user.id} xs={24} sm={12} md={8} lg={6}>
-            <AccountCard 
-              name={user.name}
-              number={user.number}
-              status={user.status}
-              onLogout={() => handleLogout(user.sessionId)}
-              sessionId={user.sessionId}
-            />
-          </Col>
-        ))}
+        {allSessions.map(session => (
+        <Col key={session.sessionId} xs={24} sm={12} md={8} lg={6}>
+          <AccountCard 
+            name={session.name}
+            number={session.number || 'Not specified'} 
+            status={session.status}
+            onLogout={() => handleLogout(session.sessionId)}
+            sessionId={session.sessionId}
+          />
+        </Col>
+      ))}
         
         {/* Other Sessions */}
         {accounts
