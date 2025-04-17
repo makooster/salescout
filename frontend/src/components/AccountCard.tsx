@@ -66,7 +66,7 @@ const AccountCard: React.FC<AccountCardProps> = ({
             {statusConfig[status].text}
           </Tag>
         </div>
-      }
+      } 
       extra={
         <Popconfirm
           title="Are you sure you want to logout?"

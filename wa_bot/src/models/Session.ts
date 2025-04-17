@@ -1,5 +1,4 @@
 import { Schema, model, Document } from "mongoose";
-import { Client } from "whatsapp-web.js";
 
 interface ISession extends Document {
   sessionId: string;

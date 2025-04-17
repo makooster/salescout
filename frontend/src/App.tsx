@@ -19,6 +19,7 @@ interface QR {
   id: string;
   qrUrl: string;
   sessionId?: string;
+  expiresAt?: number;
 }
 
 const App: React.FC = () => {
@@ -32,7 +33,9 @@ const App: React.FC = () => {
 
   
   const fetchAppData = useCallback(async (showQRCodes = false) => {
+    
     try {
+      
       setLoading(true);
       const [sessionsRes, usersRes] = await Promise.all([
         fetch(`${API_URL}/api/sessions`),
@@ -41,22 +44,28 @@ const App: React.FC = () => {
       
       const [sessions, users] = await Promise.all([
         sessionsRes.json(),
-        usersRes.json()
+        usersRes.json(),
       ]);
   
-      setAccounts(sessions);
+      const normalizedSessions = sessions.map((s: any) => ({
+        ...s,
+        number: s.number || s.phoneNumber || s.id.slice(-4) 
+      }));
+
+      setAccounts(normalizedSessions);
       setAuthorizedUsers(users);
-      
+      console.log('Raw API response:', { sessions, users });
       if (showQRCodes) {
-        const pendingSessions = sessions.filter((s: any) => s.status === 'pending');
+        const pendingSessions = sessions.filter((s: Account) => s.status === 'pending');
         setQrCards(pendingSessions.map((s: any) => ({
           id: s.sessionId,
           qrUrl: s.qrCode,
-          sessionId: s.sessionId
+          sessionId: s.sessionId,
+          expiresAt: Date.now() + 60000
         })));
       }
   
-      localStorage.setItem('last_sessions', JSON.stringify(sessions));
+      localStorage.setItem('last_sessions', JSON.stringify(normalizedSessions));
     } catch (error) {
       console.error('Failed to fetch data:', error);
       message.error('Failed to load sessions');
@@ -79,9 +88,15 @@ const App: React.FC = () => {
 
   // WebSocket connection management
   const connectWebSocket = useCallback(() => {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     const socket = new WebSocket(WS_URL);
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
 
     socket.onopen = () => {
+      reconnectAttempts = 0;
       message.success("🔗 WebSocket подключен!");
       setWs(socket);
       setIsConnected(true);
@@ -95,14 +110,28 @@ const App: React.FC = () => {
         switch (data.action) {
           case "qr":
             message.info("📲 QR-код получен. Отсканируйте для входа!");
-            setQrCards(prev => [
-              ...prev, 
-              { 
-                id: data.sessionId || Date.now().toString(), 
-                qrUrl: data.qrCode,
-                sessionId: data.sessionId
+            setQrCards(prev => {
+              const sessionId = data.sessionId;
+              const existing = prev.find(card => card.sessionId === sessionId);
+            
+              if (existing) {
+                return prev.map(card =>
+                  card.sessionId === sessionId
+                    ? { ...card, qrUrl: data.qrCode }
+                    : card
+                );
+              } else {
+                return [
+                  ...prev,
+                  {
+                    id: sessionId || Date.now().toString(),
+                    qrUrl: data.qrCode,
+                    sessionId: sessionId
+                  }
+                ];
               }
-            ]);
+            });
+            
             break;
           case "authenticated":
             message.success("✅ Авторизация успешна!");
@@ -155,27 +184,42 @@ const App: React.FC = () => {
 
     socket.onclose = () => {
       setIsConnected(false);
-      message.warning("⚠ WebSocket отключен. Переподключение...");
-      setTimeout(connectWebSocket, 5000);
+      if (reconnectAttempts < maxReconnectAttempts) {
+        const delay = Math.min(5000 * Math.pow(2, reconnectAttempts), 30000);
+        reconnectAttempts++;
+        message.warning(`WebSocket disconnected. Reconnecting in ${Math.round(delay/1000)}s...`);
+        setTimeout(connectWebSocket, delay);
+      } else {
+        message.error("Max reconnection attempts reached. Please refresh the page.");
+      }
     };
 
     return socket;
-  }, [isConnected, fetchAppData]);
+  }, [ ws, isConnected, fetchAppData]);
 
   // Initialize connection and data loading
+useEffect(() => {
+  const socket = connectWebSocket();
+  fetchAppData(false);
+  
+  return () => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.close();
+    }
+  };
+}, [connectWebSocket, fetchAppData]);
+
   useEffect(() => {
-    const socket = connectWebSocket();
-    fetchAppData(false); 
-    return () => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close();
-      }
-    };
-  }, [connectWebSocket, fetchAppData]);
+    console.log('Current sessions data:', {
+      accounts,
+      authorizedUsers,
+      allSessions: [...accounts, ...authorizedUsers]
+    });
+  }, [accounts, authorizedUsers]);
 
   // Handle adding new account
   const handleAddAccount = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) {
       message.error("WebSocket не подключен");
       return;
     }
@@ -226,33 +270,18 @@ const App: React.FC = () => {
   return (
     <div style={{ padding: 20 }}>
       {/* Accounts Section */}
-      <Row gutter={[16, 16]} justify="center">
+      <Row gutter={[16, 16]} justify="center"> 
         {allSessions.map(session => (
-        <Col key={session.sessionId} xs={24} sm={12} md={8} lg={6}>
+        <Col key={session.sessionId} xs={24} sm={12} md={12} lg={12}>
           <AccountCard 
-            name={session.name}
-            number={session.number || 'Not specified'} 
-            status={session.status}
-            onLogout={() => handleLogout(session.sessionId)}
-            sessionId={session.sessionId}
-          />
+          name={session.name}
+          number={session.number} 
+          status={session.status}
+          onLogout={() => handleLogout(session.sessionId)}
+          sessionId={session.sessionId}
+          />  
         </Col>
       ))}
-        
-        {/* Other Sessions */}
-        {accounts
-          .filter(acc => !authorizedUsers.some(u => u.id === acc.id))
-          .map(acc => (
-            <Col key={acc.id} xs={24} sm={12} md={8} lg={6}>
-              <AccountCard 
-                name={acc.name}
-                number={acc.number}
-                status={acc.status}
-                onLogout={() => handleLogout(acc.sessionId)}
-                sessionId={acc.sessionId}
-              />
-            </Col>
-          ))}
         
         {/* Add Account Button */}
         <Col xs={24} sm={12} md={8} lg={6}>
@@ -276,7 +305,7 @@ const App: React.FC = () => {
           <h2 style={{ marginTop: 30, textAlign: "center" }}>
             Сгенерированные QR-коды
           </h2>
-          <Row gutter={[16, 16]} justify="center">
+          <Row gutter={[16, 16]} justify="center" style={{ maxWidth: 1200, margin: '0 auto' }}> 
             {qrCards.map(qr => (
               <Col key={qr.id} xs={24} sm={12} md={8} lg={6}>
                 <QRCard 
